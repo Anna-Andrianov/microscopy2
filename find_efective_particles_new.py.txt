@@ -1,0 +1,234 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import trackpy as tp
+import scipy as sp
+from scipy.optimize import curve_fit
+
+MPP = 0.114
+FPS = 25
+DIAMETER = 3
+
+# This function was created to filtered all of the particles which are to far away 
+# to be efective particles at the first frame
+def effective_paticle(track_data:pd.DataFrame):
+    
+    #finding the number of particles there is in the dataframe
+    particles_num_at_0 = 0
+
+    for i in range(len(track_data)):
+        if track_data.iloc[i, track_data.columns.get_loc('frame')] == 0:
+            particles_num_at_0 = particles_num_at_0 + 1
+        else:
+            break
+
+    
+    # Making a list of particles which are close enogh to be efective particles
+    final_particle_list = []
+
+    for i in range(particles_num_at_0):
+        x_i = track_data.iloc[i, track_data.columns.get_loc('x')]
+        y_i = track_data.iloc[i, track_data.columns.get_loc('y')]
+        for j in range(particles_num_at_0 - i + 1):
+            x_j = track_data.iloc[j, track_data.columns.get_loc('x')]
+            y_j = track_data.iloc[j, track_data.columns.get_loc('y')]
+            if np.sqrt((x_i - x_j)**2 + (y_i - y_j)**2) < 1.5*DIAMETER/MPP:
+                if track_data.iloc[i, track_data.columns.get_loc('particle')] not in final_particle_list:
+                    final_particle_list.append(track_data.iloc[i, track_data.columns.get_loc('particle')])
+                if track_data.iloc[j, track_data.columns.get_loc('particle')] not in final_particle_list:
+                    final_particle_list.append(track_data.iloc[j, track_data.columns.get_loc('particle')])
+
+    # Returning only the data frame after screening the particles
+    track_data = track_data[track_data['particle'].isin(final_particle_list)]
+
+    return(track_data, final_particle_list)
+
+
+# This function returns the x and y locations of each partical sepertly
+# and in also a map of the xy locations togther
+def plot_xy(track_data:pd.DataFrame, particle_num):
+    x_data = []
+    y_data = []
+    frames = []
+    for i in particle_num:
+        y_temp = []
+        x_temp = []
+        frames_temp = []
+        temp_track_data = track_data[track_data['particle'] == i]
+        for j in range(len(temp_track_data)):
+            x_temp.append(temp_track_data.iloc[j, track_data.columns.get_loc('x')])
+            frames_temp.append(temp_track_data.iloc[j, track_data.columns.get_loc('frame')])
+            y_temp.append(temp_track_data.iloc[j, track_data.columns.get_loc('y')])
+            
+        y_data.append(y_temp)
+        x_data.append(x_temp)
+        frames.append(frames_temp)
+    
+    grid = plt.GridSpec(2, 2, wspace=0.4, hspace=0.3)
+
+
+    for i in range(len(x_data)):
+        plt.subplot(grid[0, 0])
+
+        l = int(round(len(x_data[i])/2))
+        plt.plot(frames[i], x_data[i])
+        plt.text(frames[i][l], x_data[i][l], s = str(particle_num[i]))
+        plt.title('x data')
+        plt.xlabel('frame')
+        plt.ylabel('x')
+
+        plt.subplot(grid[0, 1])
+
+        l = int(round(len(y_data[i])/2))
+        plt.plot(frames[i], y_data[i])
+        plt.text(frames[i][l], y_data[i][l], s = str(particle_num[i]))
+        plt.title('y data')
+        plt.xlabel('frame')
+        plt.ylabel('y')
+
+        plt.subplot(grid[1, :2])
+
+        l = int(round(len(y_data[i])/2))
+        plt.plot(x_data[i], y_data[i])
+        plt.text(x_data[i][l], y_data[i][l], s = str(particle_num[i]))
+        plt.title('particles locations')
+        plt.xlabel('x')
+        plt.ylabel('y')
+    
+    plt.show()
+
+
+# This function returns the distance between the particles throghout the videos
+# efective particles should be in approximetly the same distance for the hole video
+def compare_particle_distance(track_data:pd.DataFrame, particle_list):
+    
+    # This function is curently made only to identify 2 particles so should the 
+    # number of particles be larger than 2 this function will not work
+    if len(particle_list) > 3:
+        return('please choose only 2 particles')
+    x_data = []
+    y_data = []
+    delta_r = []
+
+    # getting x and y data into an array
+    for i in particle_list:
+        y_temp = []
+        x_temp = []
+        temp_track_data = track_data[track_data['particle'] == i]
+        for j in range(len(temp_track_data)):
+            x_temp.append(temp_track_data.iloc[j, track_data.columns.get_loc('x')])
+            y_temp.append(temp_track_data.iloc[j, track_data.columns.get_loc('y')])
+            
+        y_data.append(y_temp)
+        x_data.append(x_temp)
+
+    # Iterating to find distance between particles throughout the hole video
+    for i in range(len(min(x_data, key=len))-1):
+        delta_r.append(np.sqrt((x_data[0][i]-x_data[1][i])**2 + (y_data[0][i]-y_data[1][i])**2))
+
+    # Retruning the distances and frames
+    frames = np.arange(0, len(delta_r), 1)
+    return(delta_r, frames)
+        
+    
+
+
+def linear(x, a):
+    return a*x
+
+
+# This function removes the drift between the particles in a way that makes more sense
+# (to me) than the way the trackpy does it
+def remove_drift(track_data:pd.DataFrame):
+       
+       #finding drift in each frame
+       drift = tp.compute_drift(track_data)
+
+       # Fitting the drift data into a linear function assuming we have constant velocity
+       # and finding the velocity in each axis
+       parametersx, covariancex = curve_fit(linear, np.arange(0,len(drift['x']),1),  np.array(drift['x']))
+       parametersy, covariancey = curve_fit(linear, np.arange(0,len(drift['x']),1),  np.array(drift['y']))
+       velocity_x = parametersx[0]
+       velocity_y = parametersy[0]
+       
+       # Reducing velocity times frame from each  frame so
+       for i in range(len(track_data)):
+              
+              track_data.iloc[i, track_data.columns.get_loc('x')] = track_data.iloc[i,track_data.columns.get_loc('x')] - track_data.iloc[i,track_data.columns.get_loc('frame')]*velocity_x
+              
+              track_data.iloc[i,track_data.columns.get_loc('y')] = track_data.iloc[i,track_data.columns.get_loc('y')] - track_data.iloc[i,track_data.columns.get_loc('frame')]*velocity_y
+ 
+       
+       # Returning the filltered data 
+       return(track_data)
+
+
+def main():
+       file_path = input('insert file path ')
+       track_data = pd.read_excel(file_path)
+       filtered_data, num_of_particle = effective_paticle(track_data)
+
+       while True: # loop until wer'e fine with the result
+              # show time msd graphs
+              plot_xy(filtered_data, num_of_particle)
+
+              # ask what graphs to save, save as int array 
+              # (make shour to only choose 2 particles)
+              print('What graphs to filter? (0 for nothing, seperate with ,)')
+              graphs_to_filter = input()
+              graphs_to_filter = np.array(graphs_to_filter.split(','), dtype=int)
+
+              # save filtered data to new DataFrame
+              filtered_data2, num_of_particle2 = effective_paticle(filtered_data[filtered_data.particle.isin(graphs_to_filter)])
+
+              # show plots again
+              plot_xy(filtered_data2, num_of_particle2)
+              if input('is it good? y/n ') == 'y':
+                     break
+       
+       #quiting should the particle list be biger than 2
+       if compare_particle_distance(filtered_data2, num_of_particle2) == 'please choose only 2 particles':
+            return(compare_particle_distance(filtered_data2, num_of_particle2))
+
+       #plotting the distance between the particles thrghout the video
+       delta_r, frames = compare_particle_distance(filtered_data2, num_of_particle2)
+       diameter = np.full(shape = len(frames), fill_value= (DIAMETER/MPP))
+       double_diameter = np.full(shape = len(frames), fill_value= (2*DIAMETER/MPP))
+       zero = np.full(shape = len(frames), fill_value= 0)
+
+       plt.plot(frames, delta_r, label = 'Particles distance')
+       plt.plot(frames, diameter, label = 'Expected particles distance (diameter)',color = 'r')
+       plt.plot(frames, double_diameter, label = '2xDiameter')
+       plt.plot(frames, zero, label = 'Zero')
+       plt.title("Difrence in movment between the particles")
+       plt.xlabel('frame')
+       plt.ylabel(r'$\Delta$r (pixcles)')
+       plt.legend(loc = 'upper right')
+       plt.show()
+
+       check_validity = input("Does those particles act like an effective particle? y/n")
+       if check_validity != "y":
+         return
+       
+       # remove drift #
+       ################
+       drift = tp.compute_drift(filtered_data2)
+       # show drift for each axis
+       drift.plot(title='drift for each axis at each frame', ylabel='drift')
+       plt.show()
+
+       # subtract the drift
+       if input('is there drift? y/n ') == 'y':
+              filtered_data = remove_drift(filtered_data2)
+              drift = tp.compute_drift(filtered_data2)
+              drift.plot(title='drift for each axis - after subtraction', ylabel='drift')
+              plt.show()
+
+       if input('save to new xlsx file? y/n ') == 'y':
+               filtered_data2.to_excel(file_path[:-17] + 'efective_particle.xlsx')
+
+
+
+if __name__ == "__main__":
+       main()
+
